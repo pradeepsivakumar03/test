@@ -1,131 +1,238 @@
 <?php
+declare(strict_types=1);
+
+// ======================================================
 // 1. SECURITY SETTINGS
+// ======================================================
 $my_secret_key = "DEVARAYAN_PAY_SECRET_2026";
-// Get Authorization Header
-$auth_header = '';
-if (isset($_SERVER['HTTP_AUTHORIZATION'])) {
-    $auth_header = trim($_SERVER['HTTP_AUTHORIZATION']);
-} elseif (isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
-    $auth_header = trim($_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+
+// Read Authorization header safely
+$authHeader = '';
+if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+    $authHeader = trim((string)$_SERVER['HTTP_AUTHORIZATION']);
+} elseif (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+    $authHeader = trim((string)$_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+} elseif (function_exists('getallheaders')) {
+    $headers = getallheaders();
+    if (!empty($headers['Authorization'])) {
+        $authHeader = trim((string)$headers['Authorization']);
+    } elseif (!empty($headers['authorization'])) {
+        $authHeader = trim((string)$headers['authorization']);
+    }
 }
-if ($auth_header !== $my_secret_key) {
+
+// Allow either raw secret or "Bearer SECRET"
+if (stripos($authHeader, 'Bearer ') === 0) {
+    $authHeader = trim(substr($authHeader, 7));
+}
+
+if ($authHeader !== $my_secret_key) {
     http_response_code(401);
+    header('Content-Type: text/plain; charset=utf-8');
     exit("Unauthorized");
 }
+
+// ======================================================
 // 2. RECEIVE WEBHOOK DATA
-$json_payload = file_get_contents("php://input");
-$data = json_decode($json_payload, true);
-if (!$data || !isset($data['event'])) {
+// ======================================================
+$jsonPayload = file_get_contents("php://input");
+
+if ($jsonPayload === false || trim($jsonPayload) === '') {
     http_response_code(400);
-    exit("Bad Request");
+    header('Content-Type: text/plain; charset=utf-8');
+    exit("Bad Request: Empty payload");
 }
+
+$data = json_decode($jsonPayload, true);
+
+if (json_last_error() !== JSON_ERROR_NONE || !is_array($data)) {
+    http_response_code(400);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit("Bad Request: Invalid JSON");
+}
+
+if (!isset($data['event']) || !is_array($data['event'])) {
+    http_response_code(400);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit("Bad Request: Missing event object");
+}
+
 $event = $data['event'];
-$eventType = isset($event['type']) ? $event['type'] : '';
-// 3. EXTRACT THE REAL DATA FROM REVENUECAT
-$transactionId = isset($event['transaction_id']) ? $event['transaction_id'] : '0';
-$attributes = isset($event['subscriber_attributes']) ? $event['subscriber_attributes'] : [];
-// 🔥 SMARTER HELPER FUNCTION: Blocks the literal string "null" from crashing your DB!
-function getAttr($attrs, $upperKey, $camelKey, $default = '0') {
+$eventType = isset($event['type']) ? (string)$event['type'] : '';
+
+// ======================================================
+// 3. HELPER FUNCTIONS
+// ======================================================
+function getAttr(array $attrs, string $upperKey, string $camelKey, string $default = '0'): string
+{
     $val = $default;
-    
-    if (isset($attrs[$upperKey]['value'])) {
+
+    if (isset($attrs[$upperKey]) && is_array($attrs[$upperKey]) && array_key_exists('value', $attrs[$upperKey])) {
         $val = $attrs[$upperKey]['value'];
-    } elseif (isset($attrs[$camelKey]['value'])) {
+    } elseif (isset($attrs[$camelKey]) && is_array($attrs[$camelKey]) && array_key_exists('value', $attrs[$camelKey])) {
         $val = $attrs[$camelKey]['value'];
     }
-    
-    // If Flutter accidentally sent the word "null", replace it with the safe default!
+
     if ($val === 'null' || $val === null || $val === '') {
         return $default;
     }
-    
-    return $val;
+
+    return (string)$val;
 }
-// Extract attributes safely with defaults
-$regId = getAttr($attributes, 'REGID', 'regId', isset($event['app_user_id']) ? $event['app_user_id'] : '0');
-$mobileNumber = getAttr($attributes, 'MOBILE', 'mobileNo', '0000000000'); // Default to zeros if missing
-$mode = getAttr($attributes, 'MODE', 'mode', '0');
-$modeName = getAttr($attributes, 'MODE_NAME', 'modeName', 'Unknown');
-$daysOpt = getAttr($attributes, 'DAYS_OPT', 'daysOpt', '0');
+
+function xmlEscape(string $value): string
+{
+    return htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+}
+
+// ======================================================
+// 4. EXTRACT DATA FROM REVENUECAT
+// ======================================================
+$transactionId = isset($event['transaction_id']) ? (string)$event['transaction_id'] : '0';
+$appUserId     = isset($event['app_user_id']) ? (string)$event['app_user_id'] : '0';
+$attributes    = isset($event['subscriber_attributes']) && is_array($event['subscriber_attributes'])
+    ? $event['subscriber_attributes']
+    : [];
+
+// Extract attributes safely
+$regId         = getAttr($attributes, 'REGID', 'regId', $appUserId);
+$mobileNumber  = getAttr($attributes, 'MOBILE', 'mobileNo', '0000000000');
+$mode          = getAttr($attributes, 'MODE', 'mode', '0');
+$modeName      = getAttr($attributes, 'MODE_NAME', 'modeName', 'Unknown');
+$daysOpt       = getAttr($attributes, 'DAYS_OPT', 'daysOpt', '0');
 $contactsToAdd = getAttr($attributes, 'CONT_OPT', 'contOpt', '0');
-$amtOpt = getAttr($attributes, 'AMT_OPT', 'amtOpt', '0');
-$disOpt = getAttr($attributes, 'DIS_OPT', 'disOpt', '0');
-$payAmount = getAttr($attributes, 'PAY_AMOUNT', 'payAmount', '0');
-$gatewayMode = getAttr($attributes, 'GATE_WAY_MODE', 'gateWayMode', 'iOS_ApplePay');
-$worldOrderId = getAttr($attributes, 'WORL_ORDER_ID', 'worlOrderId', '1');
-// 🔥 FIX: CALCULATE DUE DATE IN PHP 🔥
-$dueDate = "";
-if (intval($daysOpt) > 0) {
-    $dueDate = date('d M Y', strtotime("+" . intval($daysOpt) . " days"));
+$amtOpt        = getAttr($attributes, 'AMT_OPT', 'amtOpt', '0');
+$disOpt        = getAttr($attributes, 'DIS_OPT', 'disOpt', '0');
+$payAmount     = getAttr($attributes, 'PAY_AMOUNT', 'payAmount', '0');
+$gatewayMode   = getAttr($attributes, 'GATE_WAY_MODE', 'gateWayMode', 'iOS_ApplePay');
+$worldOrderId  = getAttr($attributes, 'WORL_ORDER_ID', 'worlOrderId', '1');
+
+// ======================================================
+// 5. CALCULATE DUE DATE
+// ======================================================
+$dueDate = '';
+$daysOptInt = (int)$daysOpt;
+
+if ($daysOptInt > 0) {
+    $dueDate = date('d M Y', strtotime('+' . $daysOptInt . ' days'));
 }
-// 4. CALCULATE ACTUAL PAYMENT STATUS
-$actualPayStatus = 'P'; 
-$actualStatus = 'N';    
-if ($eventType === "INITIAL_PURCHASE" || $eventType === "RENEWAL" || $eventType === "PRODUCT_CHANGE") {
-    $actualPayStatus = 'S'; // Success
-    $actualStatus = 'Y';    // Active
-} elseif ($eventType === "CANCELLATION" || $eventType === "EXPIRATION" || $eventType === "BILLING_ISSUE") {
-    $actualPayStatus = 'F'; // Failed
-    $actualStatus = 'N';    // Inactive
+
+// ======================================================
+// 6. CALCULATE PAYMENT STATUS
+// ======================================================
+$actualPayStatus = 'P';
+$actualStatus    = 'N';
+
+if (in_array($eventType, ["INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE"], true)) {
+    $actualPayStatus = 'S';
+    $actualStatus    = 'Y';
+} elseif (in_array($eventType, ["CANCELLATION", "EXPIRATION", "BILLING_ISSUE"], true)) {
+    $actualPayStatus = 'F';
+    $actualStatus    = 'N';
 }
-if ($contactsToAdd == '0') {
+
+// Skip when contacts is 0
+if ((string)$contactsToAdd === '0') {
     http_response_code(200);
+    header('Content-Type: text/plain; charset=utf-8');
     exit("Skipping: Contacts is 0");
 }
-// 5. PREPARE JSON DATA FOR DB
-$regIdInt = intval($regId);
-$payModel = array(
-    'REGID' => $regId,
-    'MOBILE' => $mobileNumber,
-    'MODE' => $mode,
-    'MODE_NAME' => $modeName,
-    'DAYS_OPT' => $daysOpt,
-    'CONT_OPT' => $contactsToAdd,
-    'AMT_OPT' => $amtOpt,               
-    'DIS_OPT' => $disOpt,               
-    'PAY_AMOUNT' => $payAmount,         
-    'DUE_DATE' => $dueDate,              // PHP Generated Date
-    'ONLI_PAY_REF_ID' => $transactionId, // Apple's Real Transaction ID
-    'GATE_WAY_MODE' => $gatewayMode,    
-    'STATUS' => $actualStatus,           // PHP Calculated Status
-    'PAY_STATUS' => $actualPayStatus,    // PHP Calculated Status
-    'PAY_TXNID' => $transactionId,       // Apple's Real Transaction ID
-    'WORL_TRN_ID' => $transactionId,     // Apple's Real Transaction ID
-    'WORL_ORDER_ID' => $worldOrderId    
-);
-$jsonArray = array($payModel);
-$insertDataString = json_encode($jsonArray);
-// 6. BUILD AND SEND SOAP REQUEST
-$xml_post_string = '<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <SAVE_SUBCRIPTION_TRANS xmlns="http://tempuri.org/">
-      <User_Nam>G$$_1521_TMSK</User_Nam>
-      <INSERT_DATA>' . htmlspecialchars($insertDataString) . '</INSERT_DATA>
-      <REGID>' . $regIdInt . '</REGID>
-    </SAVE_SUBCRIPTION_TRANS>
-  </soap:Body>
-</soap:Envelope>';
+
+// ======================================================
+// 7. PREPARE JSON FOR DB
+// ======================================================
+$regIdInt = (int)$regId;
+
+$payModel = [
+    'REGID'          => $regId,
+    'MOBILE'         => $mobileNumber,
+    'MODE'           => $mode,
+    'MODE_NAME'      => $modeName,
+    'DAYS_OPT'       => $daysOpt,
+    'CONT_OPT'       => $contactsToAdd,
+    'AMT_OPT'        => $amtOpt,
+    'DIS_OPT'        => $disOpt,
+    'PAY_AMOUNT'     => $payAmount,
+    'DUE_DATE'       => $dueDate,
+    'ONLI_PAY_REF_ID'=> $transactionId,
+    'GATE_WAY_MODE'  => $gatewayMode,
+    'STATUS'         => $actualStatus,
+    'PAY_STATUS'     => $actualPayStatus,
+    'PAY_TXNID'      => $transactionId,
+    'WORL_TRN_ID'    => $transactionId,
+    'WORL_ORDER_ID'  => $worldOrderId
+];
+
+$jsonArray = [$payModel];
+$insertDataString = json_encode($jsonArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+if ($insertDataString === false) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit("Server Error: Failed to encode JSON");
+}
+
+// ======================================================
+// 8. BUILD SOAP REQUEST
+// ======================================================
+$xmlPostString = '<?xml version="1.0" encoding="utf-8"?>' .
+'<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' .
+'xmlns:xsd="http://www.w3.org/2001/XMLSchema" ' .
+'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">' .
+'  <soap:Body>' .
+'    <SAVE_SUBCRIPTION_TRANS xmlns="http://tempuri.org/">' .
+'      <User_Nam>' . xmlEscape('G$$_1521_TMSK') . '</User_Nam>' .
+'      <INSERT_DATA>' . xmlEscape($insertDataString) . '</INSERT_DATA>' .
+'      <REGID>' . $regIdInt . '</REGID>' .
+'    </SAVE_SUBCRIPTION_TRANS>' .
+'  </soap:Body>' .
+'</soap:Envelope>';
+
+// ======================================================
+// 9. SEND SOAP REQUEST
+// ======================================================
 $url = "https://trustservice.sktm.in/WebService1.asmx";
-$soap_headers = array(
+
+$soapHeaders = [
     "Content-Type: text/xml; charset=utf-8",
-    "SOAPAction: \"http://tempuri.org/SAVE_SUBCRIPTION_TRANS\"",
-    "Content-Length: " . strlen($xml_post_string)
-);
+    'SOAPAction: "http://tempuri.org/SAVE_SUBCRIPTION_TRANS"',
+    "Content-Length: " . strlen($xmlPostString)
+];
+
 $ch = curl_init();
-curl_setopt($ch, CURLOPT_URL, $url);
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_POSTFIELDS, $xml_post_string);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_HTTPHEADER, $soap_headers); 
-curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-// 🔥 GET THE REAL DATABASE RESPONSE 🔥
+
+curl_setopt_array($ch, [
+    CURLOPT_URL            => $url,
+    CURLOPT_POST           => true,
+    CURLOPT_POSTFIELDS     => $xmlPostString,
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER     => $soapHeaders,
+    CURLOPT_CONNECTTIMEOUT => 15,
+    CURLOPT_TIMEOUT        => 30,
+
+    // Better to keep SSL verification ON in production.
+    // Set these to false only if server cert is genuinely broken.
+    CURLOPT_SSL_VERIFYPEER => true,
+    CURLOPT_SSL_VERIFYHOST => 2,
+]);
+
 $response = curl_exec($ch);
-$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curlError = curl_error($ch);
+$httpCode  = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
-// Output the real HTTP code and the raw Matrimony Database answer
-http_response_code($http_code);
-echo "SKTM DATABASE RESPONSE: \n";
+
+if ($response === false) {
+    http_response_code(502);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit("SOAP Request Failed: " . $curlError);
+}
+
+// ======================================================
+// 10. RETURN RESPONSE
+// ======================================================
+http_response_code($httpCode > 0 ? $httpCode : 200);
+header('Content-Type: text/plain; charset=utf-8');
+
+echo "SKTM DATABASE RESPONSE:\n";
 echo $response;
 ?>
