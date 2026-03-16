@@ -24,17 +24,28 @@ $eventType = isset($event['type']) ? $event['type'] : '';
 // 3. EXTRACT THE REAL DATA FROM REVENUECAT
 $transactionId = isset($event['transaction_id']) ? $event['transaction_id'] : '0';
 $attributes = isset($event['subscriber_attributes']) ? $event['subscriber_attributes'] : [];
-// Helper function: Checks for both UPPERCASE (REGID) and camelCase (regId)
-// just in case your PayModel.toMapString() uses camelCase!
+// 🔥 SMARTER HELPER FUNCTION: Blocks the literal string "null" from crashing your DB!
 function getAttr($attrs, $upperKey, $camelKey, $default = '0') {
-    if (isset($attrs[$upperKey]['value'])) return $attrs[$upperKey]['value'];
-    if (isset($attrs[$camelKey]['value'])) return $attrs[$camelKey]['value'];
-    return $default;
+    $val = $default;
+    
+    if (isset($attrs[$upperKey]['value'])) {
+        $val = $attrs[$upperKey]['value'];
+    } elseif (isset($attrs[$camelKey]['value'])) {
+        $val = $attrs[$camelKey]['value'];
+    }
+    
+    // If Flutter accidentally sent the word "null", replace it with the safe default!
+    if ($val === 'null' || $val === null || $val === '') {
+        return $default;
+    }
+    
+    return $val;
 }
+// Extract attributes safely with defaults
 $regId = getAttr($attributes, 'REGID', 'regId', isset($event['app_user_id']) ? $event['app_user_id'] : '0');
-$mobileNumber = getAttr($attributes, 'MOBILE', 'mobileNo', '');
-$mode = getAttr($attributes, 'MODE', 'mode', '');
-$modeName = getAttr($attributes, 'MODE_NAME', 'modeName', '');
+$mobileNumber = getAttr($attributes, 'MOBILE', 'mobileNo', '0000000000'); // Default to zeros if missing
+$mode = getAttr($attributes, 'MODE', 'mode', '0');
+$modeName = getAttr($attributes, 'MODE_NAME', 'modeName', 'Unknown');
 $daysOpt = getAttr($attributes, 'DAYS_OPT', 'daysOpt', '0');
 $contactsToAdd = getAttr($attributes, 'CONT_OPT', 'contOpt', '0');
 $amtOpt = getAttr($attributes, 'AMT_OPT', 'amtOpt', '0');
@@ -42,8 +53,7 @@ $disOpt = getAttr($attributes, 'DIS_OPT', 'disOpt', '0');
 $payAmount = getAttr($attributes, 'PAY_AMOUNT', 'payAmount', '0');
 $gatewayMode = getAttr($attributes, 'GATE_WAY_MODE', 'gateWayMode', 'iOS_ApplePay');
 $worldOrderId = getAttr($attributes, 'WORL_ORDER_ID', 'worlOrderId', '1');
-//  FIX: CALCULATE DUE DATE IN PHP 
-// Since Flutter is no longer sending it, PHP will generate the exact future date!
+// 🔥 FIX: CALCULATE DUE DATE IN PHP 🔥
 $dueDate = "";
 if (intval($daysOpt) > 0) {
     $dueDate = date('d M Y', strtotime("+" . intval($daysOpt) . " days"));
@@ -74,11 +84,11 @@ $payModel = array(
     'AMT_OPT' => $amtOpt,               
     'DIS_OPT' => $disOpt,               
     'PAY_AMOUNT' => $payAmount,         
-    'DUE_DATE' => $dueDate,              //  Safer calculated Due Date
+    'DUE_DATE' => $dueDate,              // PHP Generated Date
     'ONLI_PAY_REF_ID' => $transactionId, // Apple's Real Transaction ID
     'GATE_WAY_MODE' => $gatewayMode,    
-    'STATUS' => $actualStatus,           // Calculated Success Status
-    'PAY_STATUS' => $actualPayStatus,    // Calculated Success Status
+    'STATUS' => $actualStatus,           // PHP Calculated Status
+    'PAY_STATUS' => $actualPayStatus,    // PHP Calculated Status
     'PAY_TXNID' => $transactionId,       // Apple's Real Transaction ID
     'WORL_TRN_ID' => $transactionId,     // Apple's Real Transaction ID
     'WORL_ORDER_ID' => $worldOrderId    
@@ -110,8 +120,12 @@ curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, $soap_headers); 
 curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+// 🔥 GET THE REAL DATABASE RESPONSE 🔥
 $response = curl_exec($ch);
+$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
-http_response_code(200);
-echo "Success";
+// Output the real HTTP code and the raw Matrimony Database answer
+http_response_code($http_code);
+echo "SKTM DATABASE RESPONSE: \n";
+echo $response;
 ?>
