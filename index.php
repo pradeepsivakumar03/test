@@ -6,8 +6,9 @@ declare(strict_types=1);
 // ======================================================
 $my_secret_key = "DEVARAYAN_PAY_SECRET_2026";
 
-// Read Authorization header safely
+// Get Authorization Header
 $authHeader = '';
+
 if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
     $authHeader = trim((string)$_SERVER['HTTP_AUTHORIZATION']);
 } elseif (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
@@ -21,7 +22,7 @@ if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
     }
 }
 
-// Allow either raw secret or "Bearer SECRET"
+// Allow both raw secret and Bearer secret
 if (stripos($authHeader, 'Bearer ') === 0) {
     $authHeader = trim(substr($authHeader, 7));
 }
@@ -86,7 +87,7 @@ function xmlEscape(string $value): string
 }
 
 // ======================================================
-// 4. EXTRACT DATA FROM REVENUECAT
+// 4. EXTRACT DATA
 // ======================================================
 $transactionId = isset($event['transaction_id']) ? (string)$event['transaction_id'] : '0';
 $appUserId     = isset($event['app_user_id']) ? (string)$event['app_user_id'] : '0';
@@ -94,7 +95,6 @@ $attributes    = isset($event['subscriber_attributes']) && is_array($event['subs
     ? $event['subscriber_attributes']
     : [];
 
-// Extract attributes safely
 $regId         = getAttr($attributes, 'REGID', 'regId', $appUserId);
 $mobileNumber  = getAttr($attributes, 'MOBILE', 'mobileNo', '0000000000');
 $mode          = getAttr($attributes, 'MODE', 'mode', '0');
@@ -121,17 +121,14 @@ if ($daysOptInt > 0) {
 // 6. CALCULATE PAYMENT STATUS
 // ======================================================
 $actualPayStatus = 'P';
-$actualStatus    = 'N';
 
-if (in_array($eventType, ["INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE"], true)) {
+if (in_array($eventType, ['INITIAL_PURCHASE', 'RENEWAL', 'PRODUCT_CHANGE'], true)) {
     $actualPayStatus = 'S';
-    $actualStatus    = 'Y';
-} elseif (in_array($eventType, ["CANCELLATION", "EXPIRATION", "BILLING_ISSUE"], true)) {
+} elseif (in_array($eventType, ['CANCELLATION', 'EXPIRATION', 'BILLING_ISSUE'], true)) {
     $actualPayStatus = 'F';
-    $actualStatus    = 'N';
 }
 
-// Skip when contacts is 0
+// Skip if contacts count is 0
 if ((string)$contactsToAdd === '0') {
     http_response_code(200);
     header('Content-Type: text/plain; charset=utf-8');
@@ -139,28 +136,28 @@ if ((string)$contactsToAdd === '0') {
 }
 
 // ======================================================
-// 7. PREPARE JSON FOR DB
+// 7. PREPARE JSON DATA FOR DB
 // ======================================================
 $regIdInt = (int)$regId;
 
 $payModel = [
-    'REGID'          => $regId,
-    'MOBILE'         => $mobileNumber,
-    'MODE'           => $mode,
-    'MODE_NAME'      => $modeName,
-    'DAYS_OPT'       => $daysOpt,
-    'CONT_OPT'       => $contactsToAdd,
-    'AMT_OPT'        => $amtOpt,
-    'DIS_OPT'        => $disOpt,
-    'PAY_AMOUNT'     => $payAmount,
-    'DUE_DATE'       => $dueDate,
-    'ONLI_PAY_REF_ID'=> $transactionId,
-    'GATE_WAY_MODE'  => $gatewayMode,
-    'STATUS'         => $actualStatus,
-    'PAY_STATUS'     => $actualPayStatus,
-    'PAY_TXNID'      => $transactionId,
-    'WORL_TRN_ID'    => $transactionId,
-    'WORL_ORDER_ID'  => $worldOrderId
+    'REGID'           => $regId,
+    'MOBILE'          => $mobileNumber,
+    'MODE'            => $mode,
+    'MODE_NAME'       => $modeName,
+    'DAYS_OPT'        => $daysOpt,
+    'CONT_OPT'        => $contactsToAdd,
+    'AMT_OPT'         => $amtOpt,
+    'DIS_OPT'         => $disOpt,
+    'PAY_AMOUNT'      => $payAmount,
+    'DUE_DATE'        => $dueDate,
+    'ONLI_PAY_REF_ID' => $transactionId,
+    'GATE_WAY_MODE'   => $gatewayMode,
+    'STATUS'          => 'N',
+    'PAY_STATUS'      => $actualPayStatus,
+    'PAY_TXNID'       => $transactionId,
+    'WORL_TRN_ID'     => $transactionId,
+    'WORL_ORDER_ID'   => $worldOrderId
 ];
 
 $jsonArray = [$payModel];
@@ -173,19 +170,19 @@ if ($insertDataString === false) {
 }
 
 // ======================================================
-// 8. BUILD SOAP REQUEST
+// 8. BUILD SOAP XML REQUEST
 // ======================================================
 $xmlPostString = '<?xml version="1.0" encoding="utf-8"?>' .
 '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' .
 'xmlns:xsd="http://www.w3.org/2001/XMLSchema" ' .
 'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">' .
-'  <soap:Body>' .
-'    <SAVE_SUBCRIPTION_TRANS xmlns="http://tempuri.org/">' .
-'      <User_Nam>' . xmlEscape('G$$_1521_TMSK') . '</User_Nam>' .
-'      <INSERT_DATA>' . xmlEscape($insertDataString) . '</INSERT_DATA>' .
-'      <REGID>' . $regIdInt . '</REGID>' .
-'    </SAVE_SUBCRIPTION_TRANS>' .
-'  </soap:Body>' .
+'<soap:Body>' .
+'<SAVE_SUBCRIPTION_TRANS xmlns="http://tempuri.org/">' .
+'<User_Nam>' . xmlEscape('G$$_1521_TMSK') . '</User_Nam>' .
+'<INSERT_DATA>' . xmlEscape($insertDataString) . '</INSERT_DATA>' .
+'<REGID>' . $regIdInt . '</REGID>' .
+'</SAVE_SUBCRIPTION_TRANS>' .
+'</soap:Body>' .
 '</soap:Envelope>';
 
 // ======================================================
@@ -210,29 +207,39 @@ curl_setopt_array($ch, [
     CURLOPT_CONNECTTIMEOUT => 15,
     CURLOPT_TIMEOUT        => 30,
 
-    // Better to keep SSL verification ON in production.
-    // Set these to false only if server cert is genuinely broken.
-    CURLOPT_SSL_VERIFYPEER => true,
-    CURLOPT_SSL_VERIFYHOST => 2,
+    // If SSL causes issue on your server, change these to false and 0 temporarily
+    CURLOPT_SSL_VERIFYPEER => false,
+    CURLOPT_SSL_VERIFYHOST => 0,
 ]);
 
 $response = curl_exec($ch);
+$httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlError = curl_error($ch);
-$httpCode  = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
 curl_close($ch);
+
+// ======================================================
+// 10. PRINT SOAP REQUEST + RESPONSE
+// ======================================================
+header('Content-Type: text/plain; charset=utf-8');
 
 if ($response === false) {
     http_response_code(502);
-    header('Content-Type: text/plain; charset=utf-8');
-    exit("SOAP Request Failed: " . $curlError);
+    echo "SOAP REQUEST:\n";
+    echo $xmlPostString;
+    echo "\n\n==============================\n\n";
+    echo "SOAP ERROR:\n";
+    echo $curlError;
+    exit;
 }
 
-// ======================================================
-// 10. RETURN RESPONSE
-// ======================================================
 http_response_code($httpCode > 0 ? $httpCode : 200);
-header('Content-Type: text/plain; charset=utf-8');
 
-echo "SKTM DATABASE RESPONSE:\n";
+echo "SOAP REQUEST:\n";
+echo $xmlPostString;
+
+echo "\n\n==============================\n\n";
+
+echo "SOAP RESPONSE:\n";
 echo $response;
 ?>
