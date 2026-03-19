@@ -235,10 +235,10 @@ if ($response === false) {
 
 http_response_code($httpCode > 0 ? $httpCode : 200);
 
-echo "SOAP REQUEST:\n";
-echo $xmlPostString;
+//echo "SOAP REQUEST:\n";
+//echo $xmlPostString;
 
-echo "\n\n==============================\n\n";
+//echo "\n\n==============================\n\n";
 
 echo "SOAP RESPONSE:\n";
 echo $response;
