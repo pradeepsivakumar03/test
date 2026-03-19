@@ -105,7 +105,7 @@ $amtOpt        = getAttr($attributes, 'AMT_OPT', 'amtOpt', '0');
 $disOpt        = getAttr($attributes, 'DIS_OPT', 'disOpt', '0');
 $payAmount     = getAttr($attributes, 'PAY_AMOUNT', 'payAmount', '0');
 $gatewayMode   = getAttr($attributes, 'GATE_WAY_MODE', 'gateWayMode', 'iOS_ApplePay');
-$worldTrnId  = getAttr($attributes, 'WORL_TRN_ID', 'worlTranId', '2');
+$worldTrnId    = getAttr($attributes, 'WORL_TRN_ID', 'worlTranId', '2');
 $worldOrderId  = getAttr($attributes, 'WORL_ORDER_ID', 'worlOrderId', '1');
 
 // ======================================================
@@ -137,7 +137,7 @@ if ((string)$contactsToAdd === '0') {
 }
 
 // ======================================================
-// 7. PREPARE JSON DATA FOR DB
+// 7. PREPARE PAYMENT MODEL
 // ======================================================
 $regIdInt = (int)$regId;
 
@@ -161,39 +161,34 @@ $payModel = [
     'WORL_ORDER_ID'   => $worldOrderId
 ];
 
-$jsonArray = [$payModel];
-$insertDataString = json_encode($jsonArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-if ($insertDataString === false) {
-    http_response_code(500);
-    header('Content-Type: text/plain; charset=utf-8');
-    exit("Server Error: Failed to encode JSON");
-}
-
 // ======================================================
 // 8. BUILD SOAP XML REQUEST
 // ======================================================
+$url = "https://trustservice.sktm.in/WebService1.asmx";
+$userName = 'G$$_1521_TMSK';
+
 $xmlPostString = '<?xml version="1.0" encoding="utf-8"?>' .
 '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' .
 'xmlns:xsd="http://www.w3.org/2001/XMLSchema" ' .
 'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">' .
 '<soap:Body>' .
-'<SAVE_SUBCRIPTION_TRANS xmlns="http://tempuri.org/">' .
-'<User_Nam>' . xmlEscape('G$$_1521_TMSK') . '</User_Nam>' .
-'<INSERT_DATA>' . xmlEscape($insertDataString) . '</INSERT_DATA>' .
+'<SUBS_Tran_Payment_StatusUpdate xmlns="http://tempuri.org/">' .
+'<User_Nam>' . xmlEscape($userName) . '</User_Nam>' .
+'<PAY_STATUS>' . xmlEscape($payModel['PAY_STATUS']) . '</PAY_STATUS>' .
+'<PAY_TXNID>' . xmlEscape($payModel['PAY_TXNID']) . '</PAY_TXNID>' .
+'<ONLI_PAY_REF_ID>' . xmlEscape($payModel['ONLI_PAY_REF_ID']) . '</ONLI_PAY_REF_ID>' .
+'<WORL_TRN_ID>' . xmlEscape($payModel['WORL_TRN_ID']) . '</WORL_TRN_ID>' .
 '<REGID>' . $regIdInt . '</REGID>' .
-'</SAVE_SUBCRIPTION_TRANS>' .
+'</SUBS_Tran_Payment_StatusUpdate>' .
 '</soap:Body>' .
 '</soap:Envelope>';
 
 // ======================================================
 // 9. SEND SOAP REQUEST
 // ======================================================
-$url = "https://trustservice.sktm.in/WebService1.asmx";
-
 $soapHeaders = [
     "Content-Type: text/xml; charset=utf-8",
-    'SOAPAction: "http://tempuri.org/SAVE_SUBCRIPTION_TRANS"',
+    'SOAPAction: "http://tempuri.org/SUBS_Tran_Payment_StatusUpdate"',
     "Content-Length: " . strlen($xmlPostString)
 ];
 
@@ -207,8 +202,6 @@ curl_setopt_array($ch, [
     CURLOPT_HTTPHEADER     => $soapHeaders,
     CURLOPT_CONNECTTIMEOUT => 15,
     CURLOPT_TIMEOUT        => 30,
-
-    // If SSL causes issue on your server, change these to false and 0 temporarily
     CURLOPT_SSL_VERIFYPEER => false,
     CURLOPT_SSL_VERIFYHOST => 0,
 ]);
@@ -220,7 +213,7 @@ $curlError = curl_error($ch);
 curl_close($ch);
 
 // ======================================================
-// 10. PRINT SOAP REQUEST + RESPONSE
+// 10. PRINT SOAP RESPONSE
 // ======================================================
 header('Content-Type: text/plain; charset=utf-8');
 
@@ -235,11 +228,6 @@ if ($response === false) {
 }
 
 http_response_code($httpCode > 0 ? $httpCode : 200);
-
-//echo "SOAP REQUEST:\n";
-//echo $xmlPostString;
-
-//echo "\n\n==============================\n\n";
 
 echo "SOAP RESPONSE:\n";
 echo $response;
