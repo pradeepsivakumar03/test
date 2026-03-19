@@ -105,6 +105,7 @@ $amtOpt        = getAttr($attributes, 'AMT_OPT', 'amtOpt', '0');
 $disOpt        = getAttr($attributes, 'DIS_OPT', 'disOpt', '0');
 $payAmount     = getAttr($attributes, 'PAY_AMOUNT', 'payAmount', '0');
 $gatewayMode   = getAttr($attributes, 'GATE_WAY_MODE', 'gateWayMode', 'iOS_ApplePay');
+$worldTrnId  = getAttr($attributes, 'WORL_TRN_ID', 'worlTranId', '2');
 $worldOrderId  = getAttr($attributes, 'WORL_ORDER_ID', 'worlOrderId', '1');
 
 // ======================================================
@@ -156,7 +157,7 @@ $payModel = [
     'STATUS'          => 'N',
     'PAY_STATUS'      => $actualPayStatus,
     'PAY_TXNID'       => $transactionId,
-    'WORL_TRN_ID'     => $transactionId,
+    'WORL_TRN_ID'     => $worldTrnId,
     'WORL_ORDER_ID'   => $worldOrderId
 ];
 
