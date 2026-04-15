@@ -123,7 +123,7 @@ if ($daysOptInt > 0) {
 // ======================================================
 $actualPayStatus = 'P';
 
-if (in_array($eventType, ['INITIAL_PURCHASE', 'RENEWAL', 'PRODUCT_CHANGE'], true)) {
+if (in_array($eventType, ['INITIAL_PURCHASE', 'NON_RENEWING_PURCHASE', 'PRODUCT_CHANGE'], true)) {
     $actualPayStatus = 'S';
 } elseif (in_array($eventType, ['CANCELLATION', 'EXPIRATION', 'BILLING_ISSUE'], true)) {
     $actualPayStatus = 'F';
